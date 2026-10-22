@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { parseConfig } from "../src/config.ts";
-import { buildMux, rewriteTools, type BeforeCall, type Mux } from "../src/mux.ts";
+import { buildMux, checkAccounts, rewriteTools, type BeforeCall, type Mux } from "../src/mux.ts";
 import { clientFor, text, tmp } from "./helpers.ts";
 
 const root = join(import.meta.dir, "..");
@@ -19,6 +19,9 @@ test("rewriteTools injects a required account enum", () => {
   expect(t!.inputSchema.properties!.account).toMatchObject({ type: "string", enum: ["work", "home"] });
   expect(t!.inputSchema.required).toEqual(["account", "path"]);
   expect(t!.description).toContain("Accounts: work, home.");
+  const [labeled] = rewriteTools([{ name: "read", inputSchema: { type: "object" } }], ["work", "home"], { work: "me@corp.com" });
+  expect(labeled!.inputSchema.properties!.account).toMatchObject({ description: "Which account to use: work (me@corp.com), home" });
+  expect(labeled!.description).toBe("Accounts: work (me@corp.com), home.");
   expect(() => rewriteTools([{ name: "x", inputSchema: { type: "object", properties: { account: {} } } }], ["a"])).toThrow(
     'already has an "account" argument',
   );
@@ -130,6 +133,27 @@ describe("stdio isolation and failure modes", () => {
     expect(text(r)).toContain('account "broken" is unavailable: failed to connect');
     await c.close();
     await mux.close();
+  });
+
+  test("a crashed upstream is restarted on the next call; other accounts are unaffected", async () => {
+    const cfg = parseConfig({ name: "echo", upstream: { command: "bun", args: [ECHO, "--crash-tool"], env: { WHO: "x" } }, accounts: { a: { env: { WHO: "a" } }, b: { env: { WHO: "b" } } } });
+    const mux = await buildMux(cfg);
+    const c = await clientFor(mux);
+    const who = async (account: string) => c.callTool({ name: "get_env", arguments: { account, name: "WHO" } });
+    expect((await c.callTool({ name: "crash", arguments: { account: "a" } })).isError).toBe(true);
+    expect(text(await who("b"))).toBe("b");
+    expect(text(await who("a"))).toBe("a");
+    expect(mux.unavailable.size).toBe(0);
+    await c.close();
+    await mux.close();
+  });
+
+  test("checkAccounts reports each account without starting a server", async () => {
+    const cfg = parseConfig({ name: "echo", upstream: { command: "bun", args: [ECHO] }, accounts: { a: {}, broken: { command: "/nonexistent/bin" } } });
+    const r = await checkAccounts(cfg, (a) => `login ${a}`);
+    expect(r[0]).toEqual({ account: "a", ok: true, tools: 2 });
+    expect(r[1]).toMatchObject({ account: "broken", ok: false });
+    expect((r[1] as { error: string }).error).toContain("failed to connect");
   });
 
   test("beforeCall hook can deny a call before it reaches the upstream", async () => {

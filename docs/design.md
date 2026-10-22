@@ -47,7 +47,8 @@ Claude Code / Codex ──stdio──► mcp-mux ──► account "work"     �
 | `upstream.command` / `args` / `env` / `cwd` | stdio 上游。 |
 | `upstream.url` / `headers` | HTTP（Streamable HTTP）上游。 |
 | `upstream.oauth` | 出现即表示该上游用 OAuth。子字段：`clientId`、`clientSecret`（预注册客户端，用于不支持 DCR/CIMD 的 AS，如 Slack）、`scope`、`callbackPort`（预注册时必须和登记的回调一致；默认临时端口）、`authorizeParams`（追加到授权 URL，用于锁定账号）。 |
-| `accounts.<name>` | 必填，至少一个。账号名只允许 `[A-Za-z0-9_-]`。可写的字段与 `upstream` 相同。 |
+| `accounts.<name>` | 必填，至少一个。账号名只允许 `[A-Za-z0-9_-]`。可写的字段与 `upstream` 相同，另加可选的 `description`。 |
+| `accounts.<name>.description` | 可选。给模型看的账号标签，比如邮箱地址或 workspace 名，会写进 `account` 参数说明：`work (me@corp.com), personal`。 |
 | `store` | 可选。`{"type":"keychain","keychain":"<路径>"}` 或 `{"type":"file","path":"<路径>"}`。默认：macOS 用登录钥匙串，其他平台用文件。 |
 
 合并规则只有一条：账号字段覆盖 `upstream` 同名字段；`env`、`headers`、`oauth`、`oauth.authorizeParams` 这几个对象再往下合并一层。没有模板语言。
@@ -82,7 +83,7 @@ Claude Code / Codex ──stdio──► mcp-mux ──► account "work"     �
   ```
 
   并把 `account` 放进 `required` 首位。
-- 描述末尾追加 `Accounts: work, personal.`，让模型在只看描述时也知道要选账号。
+- 描述末尾追加 `Accounts: work (me@corp.com), personal.`（有 `description` 时带上），让模型在只看描述时也知道要选哪个账号。
 - 上游工具自己已经有名为 `account` 的参数时拒绝启动（不做重命名，避免语义混淆）。
 - 其余字段（`annotations`、`outputSchema`、`title`）原样透传。
 
@@ -118,8 +119,13 @@ DCR 注册的客户端信息里记录了 `redirect_uris`。临时端口每次不
 - provider 从存储读 token，SDK 每个请求带 `Authorization: Bearer`。
 - 上游返回 401 时 SDK 用 refresh token 刷新并存盘；`invalid_grant` 时 SDK 清掉 token。
 - 需要浏览器交互（无 token、refresh 失败）时，serve 模式下的 provider **不打开浏览器**，而是把账号标成 `needs_login` 并抛错。启动阶段：这个账号不参与工具集，其他账号照常；全部账号都不可用才退出。调用阶段：对这个账号的调用返回 `isError` 结果，文本写明 `run: mcp-mux login <config> <account>`。
+- 不可用的账号（需要登录、启动失败、上游进程崩溃或连接断开）在**下一次被调用时重连一次**；重连成功且工具集与基准一致就恢复使用，否则继续返回错误。所以在客户端运行期间执行 `mcp-mux login`，或修好崩溃的上游，都不需要重启客户端。同一账号的并发调用只触发一次重连。
 
-### 5.3 token 存储
+### 5.3 自检（`mcp-mux status <config>`）
+
+按 serve 的方式逐个连接每个账号并 `tools/list`，打印每个账号是 `ok (N tools)`、`needs login; run: ...` 还是连接错误；有任何账号不可用就以 1 退出。不会打开浏览器。用于第一次配置后、注册到客户端之前确认配置可用。
+
+### 5.4 token 存储
 
 两种后端，接口相同：`get(key)`、`set(key, value)`、`delete(key)`，value 是一个 JSON（`tokens`、`clientInformation`、`discoveryState`）。
 
@@ -136,6 +142,7 @@ DCR 注册的客户端信息里记录了 `redirect_uris`。临时端口每次不
 |---|---|
 | 配置不合法、`${VAR}` 未设置、账号工具集不一致、上游已有 `account` 参数 | 启动时报错退出（exit 1），stderr 写原因 |
 | 某账号启动时连不上 / 需要登录 | stderr 告警并标记该账号不可用；全部不可用则退出 |
+| 上游进程退出 / 连接断开 | 标记不可用，下次调用该账号时重连；重连后工具集变了则拒绝并报错 |
 | 调用缺 `account` 或值不在 enum | JSON-RPC `InvalidParams`，消息列出可选账号 |
 | 调用不可用账号 | `isError: true` 的工具结果，写明原因和 `mcp-mux login` 命令 |
 | 上游调用抛错 | 转成 `isError: true` 结果，消息前缀 `[account <name>]`，不吞掉原始信息 |

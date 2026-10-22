@@ -42,7 +42,8 @@ export async function connectAccount(cfgName: string, name: string, acct: Accoun
   return client;
 }
 
-export function rewriteTools(tools: Tool[], accounts: string[]): Tool[] {
+export function rewriteTools(tools: Tool[], accounts: string[], labels: Record<string, string | undefined> = {}): Tool[] {
+  const list = accounts.map((a) => (labels[a] ? `${a} (${labels[a]})` : a)).join(", ");
   return tools.map((t) => {
     const schema = t.inputSchema ?? { type: "object" };
     if (schema.properties && "account" in schema.properties) {
@@ -50,18 +51,43 @@ export function rewriteTools(tools: Tool[], accounts: string[]): Tool[] {
     }
     return {
       ...t,
-      description: `${t.description ?? ""}\n\nAccounts: ${accounts.join(", ")}.`.trim(),
+      description: `${t.description ?? ""}\n\nAccounts: ${list}.`.trim(),
       inputSchema: {
         ...schema,
         type: "object",
         properties: {
-          account: { type: "string", enum: accounts, description: `Which account to use: ${accounts.join(", ")}` },
+          account: { type: "string", enum: accounts, description: `Which account to use: ${list}` },
           ...(schema.properties ?? {}),
         },
         required: ["account", ...(schema.required ?? []).filter((r) => r !== "account")],
       },
     };
   });
+}
+
+export type AccountCheck = { account: string; ok: true; tools: number } | { account: string; ok: false; error: string };
+
+const describeFailure = (account: string, e: unknown, loginHint: (account: string) => string) =>
+  e instanceof NeedsLoginError ? `needs login; ${loginHint(account)}` : `failed to connect: ${(e as Error).message}`;
+
+const needsStore = (cfg: Config) => Object.values(cfg.accounts).some((a) => a.kind === "http" && a.oauth);
+
+// Connect to each account and list its tools, without starting a server. Never opens a browser.
+export async function checkAccounts(cfg: Config, loginHint: (account: string) => string, store?: SecretStore): Promise<AccountCheck[]> {
+  const s = needsStore(cfg) ? (store ?? openStore(cfg.store)) : undefined;
+  return Promise.all(
+    Object.entries(cfg.accounts).map(async ([n, a]): Promise<AccountCheck> => {
+      let client: Client | undefined;
+      try {
+        client = await connectAccount(cfg.name, n, a, s);
+        return { account: n, ok: true, tools: (await client.listTools()).tools.length };
+      } catch (e) {
+        return { account: n, ok: false, error: describeFailure(n, e, loginHint) };
+      } finally {
+        await client?.close().catch(() => {});
+      }
+    }),
+  );
 }
 
 const sig = (ts: Tool[]) => ts.map((t) => t.name).sort();
@@ -77,29 +103,38 @@ export async function buildMux(
   opts: { store?: SecretStore; beforeCall?: BeforeCall; loginHint?: (account: string) => string } = {},
 ): Promise<Mux> {
   const names = Object.keys(cfg.accounts);
-  const needsStore = names.some((n) => {
-    const a = cfg.accounts[n]!;
-    return a.kind === "http" && a.oauth;
-  });
-  const store = needsStore ? (opts.store ?? openStore(cfg.store)) : undefined;
+  const store = needsStore(cfg) ? (opts.store ?? openStore(cfg.store)) : undefined;
   const loginHint = opts.loginHint ?? ((a: string) => `run: mcp-mux login <config> ${a}`);
 
   const clients = new Map<string, Client>();
   const unavailable = new Map<string, string>();
-  const describe = (n: string, e: unknown) =>
-    e instanceof NeedsLoginError ? `needs login; ${loginHint(n)}` : `failed to connect: ${(e as Error).message}`;
+  const describe = (n: string, e: unknown) => describeFailure(n, e, loginHint);
+
+  // A closed upstream (crashed process, dropped session) is dropped here and reconnected on the next call.
+  const track = (n: string, c: Client) => {
+    clients.set(n, c);
+    unavailable.delete(n);
+    c.onclose = () => {
+      if (clients.get(n) !== c) return;
+      clients.delete(n);
+      unavailable.set(n, "upstream connection closed");
+      log(`account "${n}" upstream connection closed; will reconnect on next call`);
+    };
+  };
 
   const settled = await Promise.allSettled(names.map((n) => connectAccount(cfg.name, n, cfg.accounts[n]!, store)));
   settled.forEach((r, i) => {
     const n = names[i]!;
-    if (r.status === "fulfilled") clients.set(n, r.value);
+    if (r.status === "fulfilled") track(n, r.value);
     else {
       unavailable.set(n, describe(n, r.reason));
       log(`account "${n}" ${unavailable.get(n)}`);
     }
   });
   const close = async () => {
-    await Promise.allSettled([...clients.values()].map((c) => c.close()));
+    const all = [...clients.values()];
+    clients.clear();
+    await Promise.allSettled(all.map((c) => c.close()));
   };
   if (clients.size === 0) {
     await close();
@@ -110,16 +145,47 @@ export async function buildMux(
   const live = names.filter((n) => clients.has(n));
   const lists = await Promise.all(live.map(async (n) => [n, (await clients.get(n)!.listTools()).tools] as const));
   const [refName, refTools] = lists[0]!;
-  for (const [n, ts] of lists.slice(1)) {
+  const toolsetDiff = (ts: Tool[]) => {
     const a = sig(refTools), b = sig(ts);
-    if (a.join() !== b.join()) {
+    if (a.join() === b.join()) return undefined;
+    const missing = a.filter((x) => !b.includes(x)), extra = b.filter((x) => !a.includes(x));
+    return `different toolset than "${refName}" (missing: ${missing.join(", ") || "-"}; extra: ${extra.join(", ") || "-"})`;
+  };
+  for (const [n, ts] of lists.slice(1)) {
+    const diff = toolsetDiff(ts);
+    if (diff) {
       await close();
-      const missing = a.filter((x) => !b.includes(x)), extra = b.filter((x) => !a.includes(x));
-      throw new Error(`account "${n}" exposes a different toolset than "${refName}" (missing: ${missing.join(", ") || "-"}; extra: ${extra.join(", ") || "-"})`);
+      throw new Error(`account "${n}" exposes a ${diff}`);
     }
   }
-  const tools = rewriteTools(refTools, names);
+  const tools = rewriteTools(refTools, names, Object.fromEntries(names.map((n) => [n, cfg.accounts[n]!.description])));
   const annotations = new Map(refTools.map((t) => [t.name, t.annotations]));
+
+  // Retry an unavailable account on demand, so `mcp-mux login` or a restarted upstream takes effect without restarting the client.
+  const pending = new Map<string, Promise<Client | undefined>>();
+  const reconnect = (n: string) => {
+    if (!pending.has(n)) {
+      const attempt = (async () => {
+        let c: Client | undefined;
+        try {
+          c = await connectAccount(cfg.name, n, cfg.accounts[n]!, store);
+          const diff = toolsetDiff((await c.listTools()).tools);
+          if (diff) throw new Error(`now exposes a ${diff}`);
+          track(n, c);
+          log(`account "${n}" reconnected`);
+          return c;
+        } catch (e) {
+          await c?.close().catch(() => {});
+          unavailable.set(n, describe(n, e));
+          return undefined;
+        } finally {
+          pending.delete(n);
+        }
+      })();
+      pending.set(n, attempt);
+    }
+    return pending.get(n)!;
+  };
 
   const server = new Server({ name: cfg.name, version: pkg.version }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
@@ -128,7 +194,7 @@ export async function buildMux(
     if (typeof account !== "string" || !names.includes(account)) {
       throw new McpError(ErrorCode.InvalidParams, `unknown account ${JSON.stringify(account)}; expected one of: ${names.join(", ")}`);
     }
-    const client = clients.get(account);
+    const client = clients.get(account) ?? (await reconnect(account));
     if (!client) return errorResult(`account "${account}" is unavailable: ${unavailable.get(account)}`);
 
     if (opts.beforeCall) {

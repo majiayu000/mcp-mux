@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { startMockOAuthServer } from "../examples/mock-oauth-server.ts";
 import { parseConfig, type Config, type HttpAccount } from "../src/config.ts";
-import { buildMux, storeKey } from "../src/mux.ts";
+import { buildMux, checkAccounts, storeKey } from "../src/mux.ts";
 import { login } from "../src/oauth.ts";
 import { EncryptedFileStore } from "../src/store.ts";
 import { clientFor, text, tmp } from "./helpers.ts";
@@ -35,6 +35,11 @@ describe("OAuth upstream, two accounts on one URL", () => {
 
   test("serve before login: every account needs login, so startup fails with the hint", async () => {
     await expect(buildMux(cfg, { store })).rejects.toThrow("work: needs login; run: mcp-mux login <config> work");
+    const r = await checkAccounts(cfg, (a) => `login ${a}`, store);
+    expect(r).toEqual([
+      { account: "work", ok: false, error: "needs login; login work" },
+      { account: "home", ok: false, error: "needs login; login home" },
+    ]);
   });
 
   test("login each account through discovery, DCR, PKCE and the local callback", async () => {
@@ -55,6 +60,10 @@ describe("OAuth upstream, two accounts on one URL", () => {
     const home = JSON.parse((await store.get("mail/home"))!);
     expect(work.tokens.access_token).not.toBe(home.tokens.access_token);
     expect(work.client.client_id).not.toBe(home.client.client_id);
+    expect(await checkAccounts(cfg, (a) => a, store)).toEqual([
+      { account: "work", ok: true, tools: 2 },
+      { account: "home", ok: true, tools: 2 },
+    ]);
   });
 
   test("one mux, same URL, each account acts as its own identity", async () => {
@@ -83,7 +92,7 @@ describe("OAuth upstream, two accounts on one URL", () => {
     await mux.close();
   });
 
-  test("logout removes one account only; the other keeps serving", async () => {
+  test("logout removes one account only; logging back in works without restarting the server", async () => {
     await login({ account: acct("work"), key: storeKey("mail", "work"), store, open: browser });
     await login({ account: acct("home"), key: storeKey("mail", "home"), store, open: browser });
     await store.delete(storeKey("mail", "home"));
@@ -92,6 +101,8 @@ describe("OAuth upstream, two accounts on one URL", () => {
     const c = await clientFor(mux);
     expect(text(await c.callTool({ name: "whoami", arguments: { account: "work" } }))).toBe("alice@work.example");
     expect((await c.callTool({ name: "whoami", arguments: { account: "home" } })).isError).toBe(true);
+    await login({ account: acct("home"), key: storeKey("mail", "home"), store, open: browser });
+    expect(text(await c.callTool({ name: "whoami", arguments: { account: "home" } }))).toBe("alice@home.example");
     await c.close();
     await mux.close();
   });

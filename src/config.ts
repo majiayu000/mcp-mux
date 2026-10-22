@@ -23,13 +23,14 @@ export type StoreConfig = { type: "keychain"; keychain?: string } | { type: "fil
 export type RawConfig = {
   name: string;
   upstream?: UpstreamFields;
-  accounts: Record<string, UpstreamFields>;
+  accounts: Record<string, UpstreamFields & { description?: string }>;
   store?: StoreConfig;
 };
 
 export type StdioAccount = { kind: "stdio"; command: string; args: string[]; env: Record<string, string>; cwd?: string };
 export type HttpAccount = { kind: "http"; url: string; headers: Record<string, string>; oauth?: OAuthConfig };
-export type Account = StdioAccount | HttpAccount;
+// `description` is shown to the model next to the account name, e.g. the mailbox address or workspace name.
+export type Account = (StdioAccount | HttpAccount) & { description?: string };
 
 export type Config = { name: string; accounts: Record<string, Account>; store?: StoreConfig };
 
@@ -89,7 +90,9 @@ export function parseConfig(raw: RawConfig, env: Record<string, string | undefin
   const accounts: Record<string, Account> = {};
   for (const n of names) {
     if (!NAME_RE.test(n)) throw new Error(`account name "${n}" must match ${NAME_RE}`);
-    accounts[n] = toAccount(n, expandDeep(merge(raw.upstream ?? {}, raw.accounts[n]!), env));
+    const { description, ...fields } = raw.accounts[n]!;
+    if (description !== undefined && typeof description !== "string") throw new Error(`account "${n}": "description" must be a string`);
+    accounts[n] = { ...toAccount(n, expandDeep(merge(raw.upstream ?? {}, fields), env)), ...(description ? { description } : {}) };
   }
   return { name: raw.name, accounts, store: raw.store && expandDeep(raw.store, env) };
 }

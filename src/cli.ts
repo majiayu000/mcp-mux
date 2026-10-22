@@ -2,7 +2,7 @@
 // mcp-mux CLI: serve | login | logout | status
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig } from "./config.ts";
-import { buildMux, log, storeKey } from "./mux.ts";
+import { buildMux, checkAccounts, log, storeKey } from "./mux.ts";
 import { login, openInBrowser } from "./oauth.ts";
 import { openStore } from "./store.ts";
 
@@ -11,7 +11,7 @@ const USAGE = `usage:
   mcp-mux login  <config.json> <account> [--no-browser]
                                            OAuth login for one account (opens a browser; --no-browser only prints the URL)
   mcp-mux logout <config.json> <account>   delete one account's stored credentials
-  mcp-mux status <config.json>             show accounts and whether credentials are stored`;
+  mcp-mux status <config.json>             connect to every account and report what works`;
 
 async function main(argv: string[]) {
   const noBrowser = argv.includes("--no-browser");
@@ -51,16 +51,14 @@ async function main(argv: string[]) {
       return;
     }
     case "status": {
-      const oauth = Object.entries(cfg.accounts).some(([, a]) => a.kind === "http" && a.oauth);
-      const store = oauth ? openStore(cfg.store) : undefined;
-      for (const [n, a] of Object.entries(cfg.accounts)) {
-        let auth = "-";
-        if (a.kind === "http" && a.oauth) {
-          const raw = await store!.get(storeKey(cfg.name, n));
-          auth = raw && JSON.parse(raw).tokens ? "token stored" : "not logged in";
-        }
-        console.log(`${n}\t${a.kind === "stdio" ? `stdio: ${a.command} ${a.args.join(" ")}` : `http: ${a.url}`}\t${auth}`);
+      // Connects to every account the same way `serve` would, so a broken config shows up before the client does.
+      const results = await checkAccounts(cfg, (a) => `run: mcp-mux login ${path} ${a}`);
+      for (const r of results) {
+        const a = cfg.accounts[r.account]!;
+        const target = a.kind === "stdio" ? `stdio: ${a.command} ${a.args.join(" ")}` : `http: ${a.url}`;
+        console.log(`${r.account}\t${r.ok ? `ok (${r.tools} tools)` : r.error}\t${target}`);
       }
+      if (results.some((r) => !r.ok)) process.exit(1);
       return;
     }
     default:

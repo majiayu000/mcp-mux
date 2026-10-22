@@ -38,6 +38,13 @@ describe("config", () => {
     expect(cfg.accounts.w).toEqual({ kind: "stdio", command: "bun", args: ["s.ts", "/w"], env: { A: "1", B: "2" }, cwd: undefined });
   });
 
+  test("keeps an optional per-account description", () => {
+    const cfg = parseConfig({ name: "m", upstream: { url: "https://x.example/mcp" }, accounts: { w: { description: "me@corp.com" }, h: {} } }, {});
+    expect(cfg.accounts.w!.description).toBe("me@corp.com");
+    expect(cfg.accounts.h!.description).toBeUndefined();
+    expect(() => parseConfig({ name: "m", accounts: { w: { url: "https://x.example", description: 1 } } } as never, {})).toThrow('"description" must be a string');
+  });
+
   test("rejects invalid configs", () => {
     const bad: [unknown, string][] = [
       [{ name: "x", accounts: {} }, "no accounts"],
