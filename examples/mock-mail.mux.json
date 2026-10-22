@@ -1,0 +1,8 @@
+{
+  "name": "mail",
+  "upstream": { "url": "http://127.0.0.1:47821/mcp", "oauth": {} },
+  "accounts": {
+    "work": { "oauth": { "authorizeParams": { "login_hint": "alice@work.example" } } },
+    "home": {}
+  }
+}

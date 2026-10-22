@@ -1,0 +1,24 @@
+{
+  "name": "mcp-mux",
+  "version": "0.1.0",
+  "description": "Put several accounts of one MCP server behind a single MCP server, with per-account OAuth.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "mcp-mux": "src/cli.ts"
+  },
+  "files": ["src", "README.md", "LICENSE"],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/server-filesystem": "^2.0.0",
+    "@types/bun": "^1.4.3",
+    "typescript": "^7.0.2"
+  }
+}

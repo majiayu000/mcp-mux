@@ -1,0 +1,8 @@
+{
+  "name": "fs",
+  "upstream": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem"] },
+  "accounts": {
+    "work": { "args": ["-y", "@modelcontextprotocol/server-filesystem", "${MUX_WORK_DIR}"] },
+    "personal": { "args": ["-y", "@modelcontextprotocol/server-filesystem", "${MUX_PERSONAL_DIR}"] }
+  }
+}
