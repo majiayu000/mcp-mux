@@ -1,5 +1,5 @@
 // Core proxy: one client per account, one rewritten toolset, calls routed by the required `account` argument.
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
@@ -14,6 +14,7 @@ import {
 import pkg from "../package.json";
 import type { Account, Config } from "./config.ts";
 import { AccountAuth, NeedsLoginError, httpTransport } from "./oauth.ts";
+import { PaginatedClient } from "./paginated-client.ts";
 import { openStore, type SecretStore } from "./store.ts";
 
 export const log = (...a: unknown[]) => console.error("[mcp-mux]", ...a); // stdout is reserved for JSON-RPC
@@ -31,7 +32,7 @@ export type BeforeCall = (ctx: CallContext) => Promise<ApprovalDecision>;
 export const storeKey = (cfgName: string, account: string) => `${cfgName}/${account}`;
 
 export async function connectAccount(cfgName: string, name: string, acct: Account, store?: SecretStore): Promise<Client> {
-  const client = new Client({ name: `mcp-mux-${name}`, version: pkg.version });
+  const client = new PaginatedClient({ name: `mcp-mux-${name}`, version: pkg.version });
   if (acct.kind === "stdio") {
     // Only the SDK's safe default env (PATH, HOME, ...) plus this account's env: other accounts' secrets stay out.
     await client.connect(new StdioClientTransport({ command: acct.command, args: acct.args, env: acct.env, cwd: acct.cwd, stderr: "inherit" }));
@@ -143,7 +144,10 @@ export async function buildMux(
 
   // The first usable account (in config order) defines the toolset; every other usable account must match it.
   const live = names.filter((n) => clients.has(n));
-  const lists = await Promise.all(live.map(async (n) => [n, (await clients.get(n)!.listTools()).tools] as const));
+  const lists = await Promise.all(live.map(async (n) => [n, (await clients.get(n)!.listTools()).tools] as const)).catch(async (e: unknown) => {
+    await close();
+    throw e;
+  });
   const [refName, refTools] = lists[0]!;
   const toolsetDiff = (ts: Tool[]) => {
     const a = sig(refTools), b = sig(ts);
@@ -158,7 +162,13 @@ export async function buildMux(
       throw new Error(`account "${n}" exposes a ${diff}`);
     }
   }
-  const tools = rewriteTools(refTools, names, Object.fromEntries(names.map((n) => [n, cfg.accounts[n]!.description])));
+  let tools: Tool[];
+  try {
+    tools = rewriteTools(refTools, names, Object.fromEntries(names.map((n) => [n, cfg.accounts[n]!.description])));
+  } catch (e) {
+    await close();
+    throw e;
+  }
   const annotations = new Map(refTools.map((t) => [t.name, t.annotations]));
 
   // Retry an unavailable account on demand, so `mcp-mux login` or a restarted upstream takes effect without restarting the client.
