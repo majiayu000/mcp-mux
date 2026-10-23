@@ -10,7 +10,7 @@ export class PaginatedClient extends Client {
     resultSchema: T,
     options?: RequestOptions,
   ): Promise<SchemaOutput<T>> {
-    if (request.method !== "tools/list" || resultSchema !== ListToolsResultSchema || request.params?.cursor !== undefined) {
+    if (request.method !== "tools/list" || !Object.is(resultSchema, ListToolsResultSchema) || request.params?.cursor !== undefined) {
       return super.request(request, resultSchema, options);
     }
 
