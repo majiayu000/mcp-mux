@@ -14,7 +14,7 @@ Today, Claude connectors take one account per connector ([anthropics/claude-code
 ## Quick start
 
 ```sh
-bun add -g github:majiayu000/mcp-mux        # needs Bun ≥ 1.3
+bun add -g mcp-mux        # needs Bun ≥ 1.3 (npm i -g mcp-mux also works; the CLI runs on Bun)
 ```
 
 Write `notion.mux.json`. Accounts share the upstream and override only what differs:
