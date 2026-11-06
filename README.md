@@ -13,9 +13,15 @@ Today, Claude connectors take one account per connector ([anthropics/claude-code
 
 ## Quick start
 
+The npm package is not published yet. Install dependencies in a source checkout (Bun ≥ 1.3):
+
 ```sh
-bun add -g mcp-mux        # needs Bun ≥ 1.3 (npm i -g mcp-mux also works; the CLI runs on Bun)
+git clone https://github.com/majiayu000/mcp-mux.git
+cd mcp-mux
+bun install --frozen-lockfile
 ```
+
+The commands below run from this checkout. For client configuration, use absolute paths to Bun, `src/cli.ts`, and your config file.
 
 Write `notion.mux.json`. Accounts share the upstream and override only what differs:
 
@@ -33,12 +39,12 @@ Write `notion.mux.json`. Accounts share the upstream and override only what diff
 Sign in each account once, check them, and add the server to your client:
 
 ```sh
-mcp-mux login notion.mux.json work
-mcp-mux login notion.mux.json personal
-mcp-mux status notion.mux.json
+bun src/cli.ts login notion.mux.json work
+bun src/cli.ts login notion.mux.json personal
+bun src/cli.ts status notion.mux.json
 
-claude mcp add notion -- mcp-mux serve /abs/path/notion.mux.json     # Claude Code
-codex mcp add notion -- mcp-mux serve /abs/path/notion.mux.json      # Codex
+claude mcp add notion -- /absolute/path/to/bun /absolute/path/to/mcp-mux/src/cli.ts serve /abs/path/notion.mux.json     # Claude Code
+codex mcp add notion -- /absolute/path/to/bun /absolute/path/to/mcp-mux/src/cli.ts serve /abs/path/notion.mux.json      # Codex
 ```
 
 The model now sees each Notion tool once, with `account: "work" | "personal"` required.
@@ -119,25 +125,27 @@ Local (stdio) server, where each account gets different arguments or environment
 
 Some servers don't support dynamic client registration; Slack is one. For those, register an OAuth app yourself and set `oauth.clientId`, `oauth.clientSecret`, and a fixed `oauth.callbackPort` whose redirect URI `http://127.0.0.1:<port>/callback` is registered with the app.
 
-Secrets: `${VAR}` is read from mcp-mux's own environment. MCP clients start servers with only the variables you configure, so put secrets (and `MCP_MUX_STORE_KEY` when using the file store) in the client's `env` for this server, for example `claude mcp add notion -e MCP_MUX_STORE_KEY=... -- mcp-mux serve ...`.
+Secrets: `${VAR}` is read from mcp-mux's own environment. MCP clients start servers with only the variables you configure, so put secrets (and `MCP_MUX_STORE_KEY` when using the file store) in the client's `env` for this server, for example `claude mcp add notion -e MCP_MUX_STORE_KEY=... -- /absolute/path/to/bun /absolute/path/to/mcp-mux/src/cli.ts serve ...`.
 
 ### Client config files
 
 Claude Code `.mcp.json`:
 
 ```json
-{ "mcpServers": { "notion": { "command": "mcp-mux", "args": ["serve", "/abs/path/notion.mux.json"] } } }
+{ "mcpServers": { "notion": { "command": "/absolute/path/to/bun", "args": ["/absolute/path/to/mcp-mux/src/cli.ts", "serve", "/abs/path/notion.mux.json"] } } }
 ```
 
 Codex `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.notion]
-command = "mcp-mux"
-args = ["serve", "/abs/path/notion.mux.json"]
+command = "/absolute/path/to/bun"
+args = ["/absolute/path/to/mcp-mux/src/cli.ts", "serve", "/abs/path/notion.mux.json"]
 ```
 
 ## Commands
+
+In a source checkout, replace the `mcp-mux` command below with `bun src/cli.ts`.
 
 ```text
 mcp-mux serve  <config.json>                          run as a stdio MCP server
