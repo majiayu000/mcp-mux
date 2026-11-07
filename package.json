@@ -1,5 +1,5 @@
 {
-  "name": "mcp-mux",
+  "name": "@lifcc/mcp-mux",
   "version": "0.1.0",
   "description": "Use multiple accounts of one MCP server (two Gmails, several Slack or Notion workspaces) in Claude Code and Codex: one toolset with a required account argument, per-account OAuth, credentials in the keychain.",
   "keywords": [
@@ -31,6 +31,7 @@
   },
   "author": "majiayu000",
   "license": "MIT",
+  "publishConfig": { "access": "public" },
   "type": "module",
   "bin": {
     "mcp-mux": "src/cli.ts"
