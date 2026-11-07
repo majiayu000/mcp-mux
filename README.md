@@ -13,7 +13,16 @@ Today, Claude connectors take one account per connector ([anthropics/claude-code
 
 ## Quick start
 
-The npm package is not published yet. Install dependencies in a source checkout (Bun ≥ 1.3):
+Requires Bun ≥ 1.3. Install the scoped npm package:
+
+```sh
+npm install -g @lifcc/mcp-mux@0.1.0
+mcp-mux --help
+```
+
+The package is named `@lifcc/mcp-mux`; the executable remains `mcp-mux`.
+
+Or install dependencies in a source checkout:
 
 ```sh
 git clone https://github.com/majiayu000/mcp-mux.git
